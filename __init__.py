@@ -12,7 +12,7 @@ __author__ = "Darya"
 __license__ = "MIT"
 
 # Импорты для удобного доступа к основным классам
-from .gui.main_window import MainWindow
+from .view.main_window import MainWindow
 from .core.capture import PacketCapture
 from .models.packet import Packet
 

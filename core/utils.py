@@ -92,3 +92,20 @@ def validate_ip_address(ip: str) -> bool:
         return True
     except socket.error:
         return False
+
+def get_interfaces() -> List[Dict[str, str]]:
+    """Возвращает список доступных сетевых интерфейсов с их IP-адресами"""
+    interfaces = []
+    for interface, addrs in psutil.net_if_addrs().items():
+        ipv4 = next((addr.address for addr in addrs if addr.family == socket.AF_INET), None)
+        if ipv4:
+            interfaces.append({
+                'name': interface,
+                'ip': ipv4,
+                'is_loopback': interface.lower() == 'lo' or ipv4.startswith('127.')
+            })
+    return interfaces
+
+def validate_packet(packet: bytes) -> bool:
+    """Проверяет валидность пакета"""
+    return len(packet) > 0  # Базовая проверка, можно расширить
