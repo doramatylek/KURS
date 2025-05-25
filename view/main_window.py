@@ -1,143 +1,294 @@
-from queue import Queue
-from tkinter import ttk, scrolledtext, messagebox
 import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox, filedialog
+from queue import Queue
+import pickle
+import os
 from datetime import datetime
 
 class MainWindow:
-    def __init__(self, root, analyzer):
+    def __init__(self, root):
         self.root = root
-        self.analyzer = analyzer
+        self.root.title("Packet Analyzer")
+        
         self.packet_queue = Queue()
         self.packet_count = 0
+        self.is_listening = False
+        
         self._setup_ui()
         self._setup_bindings()
     
     def _setup_ui(self):
-        """Инициализация интерфейса"""
-        self.root.title("Packet Analyzer")
-        self.root.geometry("1000x800")
+        # Основные элементы интерфейса
+        self._create_interface_selector()
+        self._create_packet_list()
+        self._create_details_view()
+        self._create_control_buttons()
+    
+    def _create_interface_selector(self):
+        frame = tk.Frame(self.root)
+        frame.pack(fill=tk.X)
         
-        # Main frame
-        main_frame = tk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        tk.Label(frame, text="Interface:").pack(side=tk.LEFT)
+        self.interface_combo = ttk.Combobox(frame)
+        self.interface_combo.pack(side=tk.LEFT, expand=True, fill=tk.X)
         
-        # Treeview для пакетов
-        self.packet_tree = ttk.Treeview(main_frame, 
-                                      columns=('No', 'Time', 'Source', 'Destination', 'Protocol', 'Length', 'Info'),
-                                      show='headings',
-                                      selectmode='browse')
+        tk.Label(frame, text="Filter:").pack(side=tk.LEFT)
+        self.filter_entry = tk.Entry(frame)
+        self.filter_entry.pack(side=tk.LEFT, expand=True, fill=tk.X)
+    
+    def _create_packet_list(self):
+        frame = tk.Frame(self.root)
+        frame.pack(fill=tk.BOTH, expand=True)
         
-        # Настройка колонок
-        columns = {
-            'No': {'width': 50, 'anchor': 'center'},
-            'Time': {'width': 120},
-            'Source': {'width': 150},
-            'Destination': {'width': 150},
-            'Protocol': {'width': 80},
-            'Length': {'width': 60, 'anchor': 'center'},
-            'Info': {'width': 300}
-        }
+        columns = ('No', 'Time', 'Source', 'Destination', 'Protocol', 'Length', 'Info')
+        self.packet_tree = ttk.Treeview(frame, columns=columns, show='headings')
         
-        for col, params in columns.items():
+        for col in columns:
             self.packet_tree.heading(col, text=col)
-            self.packet_tree.column(col, **params)
+            self.packet_tree.column(col, width=100)
         
-        self.packet_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=self.packet_tree.yview)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.packet_tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.packet_tree.configure(yscrollcommand=scrollbar.set)
-        
-        # Текстовое поле для деталей
-        self.details_text = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD)
-        self.details_text.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
-        
-        # Кнопки управления
-        button_frame = tk.Frame(self.root)
-        button_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        tk.Button(button_frame, text="Start", command=self.start_capture).pack(side=tk.LEFT)
-        tk.Button(button_frame, text="Stop", command=self.stop_capture).pack(side=tk.LEFT)
-        tk.Button(button_frame, text="Clear", command=self.clear_packets).pack(side=tk.LEFT)
+        self.packet_tree.pack(fill=tk.BOTH, expand=True)
     
+    def _create_details_view(self):
+        self.details_text = scrolledtext.ScrolledText(self.root, wrap=tk.WORD)
+        self.details_text.pack(fill=tk.BOTH, expand=True)
+    
+    def _create_control_buttons(self):
+        frame = tk.Frame(self.root)
+        frame.pack(fill=tk.X)
+        
+        tk.Button(frame, text="Start", command=self.start_capture).pack(side=tk.LEFT)
+        tk.Button(frame, text="Stop", command=self.stop_capture).pack(side=tk.LEFT)
+        tk.Button(frame, text="Clear", command=self.clear_packets).pack(side=tk.LEFT)
+        tk.Button(frame, text="Save", command=self.save_session).pack(side=tk.LEFT)
+        tk.Button(frame, text="Load", command=self.load_session).pack(side=tk.LEFT)
+    
+    def start_capture(self):
+        selected_interface = self.interface_combo.get()
+        if not selected_interface:
+            messagebox.showerror("Error", "Please select an interface")
+            return
+
+        self.is_listening = True
+        self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+        self.clear_button.config(state=tk.DISABLED)
+
+        ip_address = self.get_interface_ip(selected_interface)
+        if not ip_address:
+            messagebox.showerror("Error", "Invalid IP address for the selected interface")
+            self.stop_listening()
+            return
+
+        try:
+            if platform.system() == "Windows":
+                self.socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP)
+                self.socket.bind((ip_address, 0))
+                self.socket.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+            else:
+                self.socket = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003))
+                self.socket.bind((selected_interface, 0))
+
+            self.socket.settimeout(1.0)
+            threading.Thread(target=self.capture_packets, daemon=True).start()
+            self.update_ui()  # Запускаем обновление интерфейса
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to start capture: {str(e)}")
+            self.stop_listening()
+
+    def stop_capture(self):
+         self.is_listening = False
+                self.start_button.config(state=tk.NORMAL)
+                self.stop_button.config(state=tk.DISABLED)
+                self.clear_button.config(state=tk.NORMAL)
+
+                if self.socket:
+                    try:
+                        if platform.system() == "Windows":
+                            self.socket.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
+                        self.socket.close()
+                    except:
+                        pass
+                    self.socket = None
+
+    
+    def clear_packets(self):
+        self.packet_tree.delete(*self.packet_tree.get_children())
+        self.details_text.delete(1.0, tk.END)
+        self.packet_count = 0
+    
+    def save_session(self):
+        if not self.packet_tree.get_children():
+            messagebox.showwarning("Warning", "No packets to save")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".psniff",
+            filetypes=[("Packet Sniffer files", "*.psniff"), ("All files", "*.*")]
+        )
+
+        if not file_path:
+            return
+
+        try:
+            packets = []
+            for item in self.packet_tree.get_children():
+                packet_data = self.packet_tree.item(item)
+                packets.append({
+                    'values': packet_data['values'],
+                    'tags': packet_data['tags'],
+                    'packet': packet_data['tags'][1] if len(packet_data['tags']) > 1 else None
+                })
+
+            with open(file_path, 'wb') as f:
+                pickle.dump({
+                    'packets': packets,
+                    'filter': self.filter_text.get()
+                }, f)
+
+            messagebox.showinfo("Success", f"Session saved to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save session: {str(e)}")
+
+    def load_session(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Packet Sniffer files", "*.psniff"), ("All files", "*.*")]
+        )
+
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'rb') as f:
+                session = pickle.load(f)
+
+            viewer = tk.Toplevel(self.root)
+            viewer.title(f"Packet Sniffer Viewer - {os.path.basename(file_path)}")
+
+            # Filter frame
+            filter_var = StringVar(value=session.get('filter', ''))
+            filter_frame = tk.Frame(viewer)
+            filter_frame.pack(fill=tk.X, padx=5, pady=5)
+
+            tk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT)
+            filter_entry = tk.Entry(filter_frame, textvariable=filter_var)
+            filter_entry.pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+            # Packet tree
+            columns = ('No', 'Time', 'Source', 'Destination', 'Protocol', 'Length', 'Info')
+            packet_tree = ttk.Treeview(viewer, columns=columns, show='headings')
+            for col in columns:
+                packet_tree.heading(col, text=col)
+                packet_tree.column(col, width=100)
+
+            packet_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+            # Details text
+            details_text = scrolledtext.ScrolledText(viewer, wrap=tk.WORD, width=100, height=15)
+            details_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+            # Load packets
+            for packet_data in session['packets']:
+                packet_tree.insert('', 'end',
+                                 values=packet_data['values'],
+                                 tags=packet_data['tags'])
+
+            # Show details function
+            def show_details(event):
+                selected_item = packet_tree.selection()
+                if not selected_item:
+                    return
+
+                item = packet_tree.item(selected_item)
+                packet = item['tags'][1] if len(item['tags']) > 1 else None
+
+                if not packet:
+                    return
+
+                details_text.delete(1.0, tk.END)
+                details_text.insert(tk.END, f"Packet #{item['values'][0]} captured at {item['values'][1]}\n")
+                details_text.insert(tk.END, f"Source: {item['values'][2]}\n")
+                details_text.insert(tk.END, f"Destination: {item['values'][3]}\n")
+                details_text.insert(tk.END, f"Protocol: {item['values'][4]}\n")
+                details_text.insert(tk.END, f"Length: {item['values'][5]} bytes\n\n")
+
+                details_text.insert(tk.END, "Hex dump:\n")
+
+                if isinstance(packet, str):
+                    try:
+                        packet = packet.encode('latin-1')
+                    except:
+                        packet = b''
+
+                for i in range(0, len(packet), 16):
+                    chunk = packet[i:i+16]
+                    hex_str = ' '.join(f"{b:02x}" for b in chunk)
+                    ascii_str = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
+                    details_text.insert(tk.END, f"{i:04x}: {hex_str.ljust(47)}  {ascii_str}\n")
+
+            packet_tree.bind('<<TreeviewSelect>>', show_details)
+
+            # Filter function
+            def apply_filter(*args):
+                filter_text = filter_var.get().lower()
+                for item in packet_tree.get_children():
+                    packet_data = packet_tree.item(item)
+                    values = packet_data['values']
+                    tags = packet_data['tags']
+
+                    if not filter_text:
+                        packet_tree.item(item, tags=tags)
+                        continue
+
+                    if (filter_text in str(values[2]).lower() or
+                        filter_text in str(values[3]).lower() or
+                        filter_text in str(values[4]).lower() or
+                        filter_text in str(values[6]).lower()):
+                        packet_tree.item(item, tags=tags)
+                    else:
+                        packet_tree.item(item, tags=('hidden',))
+
+                packet_tree.tag_configure('hidden', foreground='gray80')
+
+            filter_var.trace_add('write', apply_filter)
+            apply_filter()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load session: {str(e)}")
+
     def _setup_bindings(self):
-        """Настройка обработчиков событий"""
         self.packet_tree.bind('<<TreeviewSelect>>', self._show_packet_details)
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
     
     def _show_packet_details(self, event):
-        """Отображение деталей выбранного пакета"""
         selected_item = self.packet_tree.selection()
         if not selected_item:
             return
-        
+
         item = self.packet_tree.item(selected_item)
-        packet_data = item['values']
-        raw_packet = item['tags'][0] if item['tags'] else b''
-        
-        self.details_text.config(state=tk.NORMAL)
+        packet = item['tags'][1] if len(item['tags']) > 1 else None
+
+        if not packet:
+            return
+
         self.details_text.delete(1.0, tk.END)
-        
-        # Основная информация
-        self.details_text.insert(tk.END, f"Packet #{packet_data[0]}\n")
-        self.details_text.insert(tk.END, f"Timestamp: {packet_data[1]}\n")
-        self.details_text.insert(tk.END, f"Source: {packet_data[2]}\n")
-        self.details_text.insert(tk.END, f"Destination: {packet_data[3]}\n")
-        self.details_text.insert(tk.END, f"Protocol: {packet_data[4]}\n")
-        self.details_text.insert(tk.END, f"Length: {packet_data[5]} bytes\n\n")
-        
-        # Hex dump
+        self.details_text.insert(tk.END, f"Packet #{item['values'][0]} captured at {item['values'][1]}\n")
+        self.details_text.insert(tk.END, f"Source: {item['values'][2]}\n")
+        self.details_text.insert(tk.END, f"Destination: {item['values'][3]}\n")
+        self.details_text.insert(tk.END, f"Protocol: {item['values'][4]}\n")
+        self.details_text.insert(tk.END, f"Length: {item['values'][5]} bytes\n\n")
         self.details_text.insert(tk.END, "Hex dump:\n")
-        
-        if isinstance(raw_packet, str):
+
+        if isinstance(packet, str):
             try:
-                raw_packet = raw_packet.encode('latin-1')
+                packet = packet.encode('latin-1')
             except:
-                raw_packet = b''
-        
-        for i in range(0, len(raw_packet), 16):
-            chunk = raw_packet[i:i+16]
+                packet = b''
+
+        for i in range(0, len(packet), 16):
+            chunk = packet[i:i+16]
             hex_str = ' '.join(f"{b:02x}" for b in chunk)
             ascii_str = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
             self.details_text.insert(tk.END, f"{i:04x}: {hex_str.ljust(47)}  {ascii_str}\n")
-        
-        self.details_text.config(state=tk.DISABLED)
-    
-    def start_capture(self):
-        """Начать захват пакетов"""
-        self.packet_count = 0
-        messagebox.showinfo("Info", "Capture started")
-    
-    def stop_capture(self):
-        """Остановить захват пакетов"""
-        messagebox.showinfo("Info", "Capture stopped")
-    
-    def clear_packets(self):
-        """Очистить список пакетов"""
-        for item in self.packet_tree.get_children():
-            self.packet_tree.delete(item)
-        self.details_text.config(state=tk.NORMAL)
-        self.details_text.delete(1.0, tk.END)
-        self.details_text.config(state=tk.DISABLED)
-        self.packet_count = 0
-    
-    def on_close(self):
-        """Обработчик закрытия окна"""
-        if messagebox.askokcancel("Quit", "Do you want to quit?"):
-            self.root.destroy()
-    
-    def add_packet(self, packet_data):
-        """Добавить пакет в Treeview"""
-        self.packet_count += 1
-        values = (
-            self.packet_count,
-            datetime.now().strftime("%H:%M:%S.%f")[:-3],
-            packet_data.get('src', 'Unknown'),
-            packet_data.get('dst', 'Unknown'),
-            packet_data.get('protocol', 'Unknown'),
-            len(packet_data.get('raw', b'')),
-            packet_data.get('info', '')
-        )
-        self.packet_tree.insert('', 'end', values=values, tags=(packet_data.get('raw', b''),))
-        self.packet_tree.see(self.packet_tree.get_children()[-1])

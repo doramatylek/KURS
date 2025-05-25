@@ -1,12 +1,11 @@
 import socket
 import threading
-from queue import Queue
 import platform
 import psutil
 
 class PacketCapture:
-    def __init__(self, packet_queue):
-        self.packet_queue = packet_queue
+    def __init__(self, packet_handler):
+        self.packet_handler = packet_handler
         self.is_listening = False
         self.socket = None
 
@@ -29,12 +28,12 @@ class PacketCapture:
         while self.is_listening:
             try:
                 packet, _ = self.socket.recvfrom(65535)
-                self.packet_queue.put(packet)
+                self.packet_handler(packet)
             except socket.timeout:
                 continue
             except Exception as e:
                 if self.is_listening:
-                    self.packet_queue.put(("ERROR", str(e)))
+                    print(f"Capture error: {e}")
                 break
 
     def stop(self):
@@ -43,11 +42,7 @@ class PacketCapture:
             if platform.system() == "Windows":
                 self.socket.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
             self.socket.close()
-            self.socket = None
 
     def _get_interface_ip(self, interface):
-        addresses = psutil.net_if_addrs().get(interface, [])
-        for addr in addresses:
-            if addr.family == socket.AF_INET:
-                return addr.address
-        return None
+        addrs = psutil.net_if_addrs().get(interface, [])
+        return next((addr.address for addr in addrs if addr.family == socket.AF_INET), None)
