@@ -34,28 +34,20 @@ class PacketAnalyzer:
 
     def update_ui(self):
         packets_to_process = []
-        while len(packets_to_process) < self.batch_size and not self.packet_queue.empty():
+        while not self.packet_queue.empty():
             packet = self.packet_queue.get()
             packets_to_process.append(packet)
-        
-        if packets_to_process:
-            if len(self.gui.packet_tree.get_children()) + len(packets_to_process) > self.max_packets:
-                items_to_remove = len(self.gui.packet_tree.get_children()) + len(packets_to_process) - self.max_packets
-                for item in list(self.gui.packet_tree.get_children())[:items_to_remove]:
-                    self.gui.packet_tree.delete(item)
-            
-            self.gui.packet_tree.configure(displaycolumns=[])
-            
-            for packet in packets_to_process:
-                processed = self.parser.process_packet(packet)
-                if processed:
-                    self.gui.add_packet_to_tree(processed)
-            
-            self.gui.packet_tree.configure(displaycolumns=self.gui.COLUMNS)
-            self.gui.packet_tree.see(self.gui.packet_tree.get_children()[-1])
-        
-        self.root.after(100, self.update_ui)
 
+        if packets_to_process:
+            for packet in packets_to_process:
+                try:
+                    processed = self.parser.process_packet(packet)
+                    if processed:
+                        self.gui.add_packet_to_tree(processed)
+                except Exception as e:
+                    print(f"Error processing packet: {e}")
+
+        self.root.after(100, self.update_ui)
     def start_listening(self):
         selected_interface = self.gui.interface_combo.get()
         if not selected_interface:

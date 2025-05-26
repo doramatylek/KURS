@@ -300,3 +300,91 @@ class PacketParser:
                     'hex': transport_packet.hex(':')
                 }
 
+    def process_packet(self, packet):
+        """Основной метод для полного разбора пакета через все уровни"""
+        try:
+            if isinstance(packet, str):
+                try:
+                    packet = packet.encode('latin-1')
+                except:
+                    packet = b''
+
+            result = {
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                'length': len(packet),
+                'layers': {},
+                'raw': packet
+            }
+
+            # Для Windows (нет Ethernet заголовка)
+            if platform.system() == "Windows":
+                # Парсим IP уровень
+                protocol, src_ip, dst_ip, ip_version, ttl, ip_remaining = self._parse_ip_layer(packet, result)
+
+                if protocol is None:
+                    return None
+
+                # Парсим транспортный уровень
+                src_port, dst_port, transport_remaining = self._parse_transport_layer(
+                    ip_remaining, protocol, ip_version, result
+                )
+
+                # Парсим прикладной уровень (если есть порты)
+                if src_port is not None and dst_port is not None:
+                    self._parse_application_layer(
+                        transport_remaining, protocol, src_port, dst_port, result
+                    )
+
+            # Для Linux/Unix (есть Ethernet заголовок)
+            else:
+                if len(packet) < 14:
+                    return None
+
+                # Парсим Ethernet уровень
+                eth_proto, eth_remaining = self._parse_ethernet_layer(packet, result)
+
+                # Парсим IP уровень (только для IPv4/IPv6)
+                if eth_proto in (0x0800, 0x86DD):
+                    protocol, src_ip, dst_ip, ip_version, ttl, ip_remaining = self._parse_ip_layer(
+                        eth_remaining, result
+                    )
+
+                    # Парсим транспортный уровень
+                    src_port, dst_port, transport_remaining = self._parse_transport_layer(
+                        ip_remaining, protocol, ip_version, result
+                    )
+
+                    # Парсим прикладной уровень (если есть порты)
+                    if src_port is not None and dst_port is not None:
+                        self._parse_application_layer(
+                            transport_remaining, protocol, src_port, dst_port, result
+                        )
+
+            # Обновляем статистику
+            self._update_stats(result)
+            return result
+
+        except Exception as e:
+            print(f"Error parsing packet: {e}")
+            return None
+
+    def _update_stats(self, result):
+        """Обновление статистики на основе разобранного пакета"""
+        self.packet_count += 1
+
+        if 'IP' in result['layers']:
+            protocol_name = result['layers']['IP'].get('protocol_name', 'Unknown')
+            self.protocol_stats[protocol_name] += 1
+
+            if 'TCP' in result['layers']:
+                conn_key = (
+                    f"{result['layers']['IP']['src_ip']}:{result['layers']['TCP']['src_port']} -> "
+                    f"{result['layers']['IP']['dst_ip']}:{result['layers']['TCP']['dst_port']}"
+                )
+                self.connection_stats[conn_key] += 1
+            elif 'UDP' in result['layers']:
+                conn_key = (
+                    f"{result['layers']['IP']['src_ip']}:{result['layers']['UDP']['src_port']} -> "
+                    f"{result['layers']['IP']['dst_ip']}:{result['layers']['UDP']['dst_port']}"
+                )
+                self.connection_stats[conn_key] += 1

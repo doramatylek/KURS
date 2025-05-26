@@ -131,8 +131,8 @@ class GUIManager:
         self.update_status()
 
     def add_packet_to_tree(self, packet_data):
-        """Add parsed packet to the packet list"""
         values = (
+            len(self.packet_tree.get_children()) + 1,
             packet_data['timestamp'],
             f"{packet_data.get('src_ip', '')}:{packet_data.get('src_port', '')}",
             f"{packet_data.get('dst_ip', '')}:{packet_data.get('dst_port', '')}",
@@ -140,10 +140,7 @@ class GUIManager:
             packet_data['length'],
             packet_data.get('info', '')
         )
-
-        item = self.packet_tree.insert('', 'end', values=values)
-        self.packet_tree.see(item)
-        self.update_status()
+        self.packet_tree.insert('', 'end', values=values)
 
     def clear_packets(self):
         """Clear all captured packets"""
@@ -188,11 +185,7 @@ class GUIManager:
 
             if 'fields' in layer_data:
                 for field in layer_data['fields']:
-                    field_node = self.details_tree.insert(
-                        layer_node, 'end',
-                        text=field['name'],
-                        values=(field['value'], field.get('bytes', b'').hex(' ') if 'bytes' in field else '')
-                    )
+                    field_node = self.details_tree.insert(layer_node, 'end',text=field['name'],values=(field['value'], field.get('bytes', b'').hex(' ') if 'bytes' in field else ''))
         # Show hex dump of entire packet
         self.show_hex_dump(packet_data['raw'])
 
