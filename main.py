@@ -1,7 +1,7 @@
+from packet_analyzer.analyzer import PacketAnalyzer
 import tkinter as tk
-from view.main_window import MainWindow
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = MainWindow(root)
+    analyzer = PacketAnalyzer(root)
     root.mainloop()

@@ -1,4 +1,0 @@
-class Config:
-    MAX_PACKETS = 10000
-    BATCH_SIZE = 50
-    UPDATE_INTERVAL_MS = 100
