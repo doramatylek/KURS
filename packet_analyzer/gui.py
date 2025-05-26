@@ -12,146 +12,256 @@ class GUIManager:
         self.root = root
         self.analyzer = analyzer
         self.setup_ui()
+        self.current_packet_details = None
 
     def setup_ui(self):
-        # Interface selection
-        self.interface_label = tk.Label(self.root, text="Select Network Interface:")
-        self.interface_label.grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        # Main container
+        self.main_frame = ttk.Frame(self.root)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        self.interface_combo = ttk.Combobox(self.root, values=self.get_interface_names())
-        self.interface_combo.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+        # Top panel (controls)
+        self.control_frame = ttk.Frame(self.main_frame)
+        self.control_frame.pack(fill=tk.X, pady=(0, 5))
+
+        # Interface selection
+        self.interface_label = ttk.Label(self.control_frame, text="Interface:")
+        self.interface_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.interface_combo = ttk.Combobox(self.control_frame, values=self.get_interface_names(), width=25)
+        self.interface_combo.pack(side=tk.LEFT, padx=(0, 10))
 
         # Filter setup
-        self.filter_label = tk.Label(self.root, text="Filter (e.g., tcp, udp, port 80):")
-        self.filter_label.grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        self.filter_label = ttk.Label(self.control_frame, text="Filter:")
+        self.filter_label.pack(side=tk.LEFT, padx=(0, 5))
 
         self.filter_text = tk.StringVar()
-        self.filter_entry = tk.Entry(self.root, textvariable=self.filter_text)
-        self.filter_entry.grid(row=1, column=1, padx=5, pady=5, sticky='ew')
+        self.filter_entry = ttk.Entry(self.control_frame, textvariable=self.filter_text, width=30)
+        self.filter_entry.pack(side=tk.LEFT, padx=(0, 10))
         self.filter_text.trace_add('write', self.apply_filter)
 
+        # Buttons
+        self.start_button = ttk.Button(self.control_frame, text="Start", command=self.analyzer.start_listening)
+        self.start_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.stop_button = ttk.Button(self.control_frame, text="Stop", command=self.analyzer.stop_listening, state=tk.DISABLED)
+        self.stop_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.clear_button = ttk.Button(self.control_frame, text="Clear", command=self.clear_packets)
+        self.clear_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # Packet display area
+        self.packet_panel = ttk.PanedWindow(self.main_frame, orient=tk.VERTICAL)
+        self.packet_panel.pack(fill=tk.BOTH, expand=True)
+
         # Packet list (treeview)
-        self.packet_tree = ttk.Treeview(self.root, columns=self.COLUMNS, show='headings')
+        self.packet_tree_frame = ttk.Frame(self.packet_panel)
+        self.packet_tree = ttk.Treeview(self.packet_tree_frame, columns=self.COLUMNS, show='headings', selectmode='browse')
+
+        # Configure columns
+        col_widths = {
+            'No': 50, 'Time': 120, 'Source': 180,
+            'Destination': 180, 'Protocol': 80,
+            'Length': 70, 'Info': 300
+        }
+
         for col in self.COLUMNS:
             self.packet_tree.heading(col, text=col)
-            self.packet_tree.column(col, width=100)
+            self.packet_tree.column(col, width=col_widths.get(col, 100))
 
-        self.packet_tree.column('No', width=50)
-        self.packet_tree.column('Time', width=100)
-        self.packet_tree.column('Source', width=150)
-        self.packet_tree.column('Destination', width=150)
-        self.packet_tree.column('Protocol', width=80)
-        self.packet_tree.column('Length', width=80)
-        self.packet_tree.column('Info', width=300)
+        # Add scrollbars
+        tree_scroll_y = ttk.Scrollbar(self.packet_tree_frame, orient=tk.VERTICAL, command=self.packet_tree.yview)
+        tree_scroll_x = ttk.Scrollbar(self.packet_tree_frame, orient=tk.HORIZONTAL, command=self.packet_tree.xview)
+        self.packet_tree.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
 
-        self.packet_tree.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky='nsew')
-        self.packet_tree.tag_configure('hidden', foreground='gray80')
+        # Grid layout for treeview and scrollbars
+        self.packet_tree.grid(row=0, column=0, sticky='nsew')
+        tree_scroll_y.grid(row=0, column=1, sticky='ns')
+        tree_scroll_x.grid(row=1, column=0, sticky='ew')
 
-        # Packet details
-        self.details_text = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, width=100, height=15)
-        self.details_text.grid(row=3, column=0, columnspan=2, padx=5, pady=5, sticky='nsew')
+        self.packet_tree_frame.grid_rowconfigure(0, weight=1)
+        self.packet_tree_frame.grid_columnconfigure(0, weight=1)
 
-        # Buttons
-        self.button_frame = tk.Frame(self.root)
-        self.button_frame.grid(row=4, column=0, columnspan=2, pady=5)
+        self.packet_panel.add(self.packet_tree_frame, weight=1)
 
-        self.start_button = tk.Button(self.button_frame, text="Start", command=self.analyzer.start_listening)
-        self.start_button.pack(side=tk.LEFT, padx=5)
+        # Packet details (treeview for layers)
+        self.details_frame = ttk.Frame(self.packet_panel)
+        self.details_tree = ttk.Treeview(self.details_frame, columns=('field', 'value', 'bytes'), show='tree', selectmode='browse')
+        self.details_tree.heading('#0', text='Packet Layers')
+        self.details_tree.heading('field', text='Field')
+        self.details_tree.heading('value', text='Value')
+        self.details_tree.heading('bytes', text='Bytes')
 
-        self.stop_button = tk.Button(self.button_frame, text="Stop", command=self.analyzer.stop_listening, state=tk.DISABLED)
-        self.stop_button.pack(side=tk.LEFT, padx=5)
+        self.details_tree.column('#0', width=150)
+        self.details_tree.column('field', width=150)
+        self.details_tree.column('value', width=250)
+        self.details_tree.column('bytes', width=150)
 
-        self.clear_button = tk.Button(self.button_frame, text="Clear", command=self.clear_packets)
-        self.clear_button.pack(side=tk.LEFT, padx=5)
+        # Add scrollbars
+        details_scroll_y = ttk.Scrollbar(self.details_frame, orient=tk.VERTICAL, command=self.details_tree.yview)
+        details_scroll_x = ttk.Scrollbar(self.details_frame, orient=tk.HORIZONTAL, command=self.details_tree.xview)
+        self.details_tree.configure(yscrollcommand=details_scroll_y.set, xscrollcommand=details_scroll_x.set)
 
-        # File operations
-        self.file_frame = tk.Frame(self.root)
-        self.file_frame.grid(row=5, column=0, columnspan=2, pady=5)
+        # Grid layout for details tree
+        self.details_tree.grid(row=0, column=0, sticky='nsew')
+        details_scroll_y.grid(row=0, column=1, sticky='ns')
+        details_scroll_x.grid(row=1, column=0, sticky='ew')
 
-        self.save_button = tk.Button(self.file_frame, text="Save Session", command=self.save_session)
-        self.save_button.pack(side=tk.LEFT, padx=5)
+        self.details_frame.grid_rowconfigure(0, weight=1)
+        self.details_frame.grid_columnconfigure(0, weight=1)
 
-        self.load_button = tk.Button(self.file_frame, text="Load Session", command=self.load_session)
-        self.load_button.pack(side=tk.LEFT, padx=5)
+        self.packet_panel.add(self.details_frame, weight=1)
 
-        # Grid configuration
-        self.root.grid_rowconfigure(2, weight=1)
-        self.root.grid_columnconfigure(1, weight=1)
+        # Hex dump panel
+        self.hex_frame = ttk.Frame(self.main_frame)
+        self.hex_frame.pack(fill=tk.BOTH, expand=False, pady=(5, 0))
+
+        self.hex_text = scrolledtext.ScrolledText(self.hex_frame, wrap=tk.WORD, width=100, height=10)
+        self.hex_text.pack(fill=tk.BOTH, expand=True)
+
+        # Status bar
+        self.status_var = tk.StringVar()
+        self.status_bar = ttk.Label(self.main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
+        self.status_bar.pack(fill=tk.X, pady=(5, 0))
 
         # Bindings
         self.packet_tree.bind('<<TreeviewSelect>>', self.show_packet_details)
+        self.details_tree.bind('<<TreeviewSelect>>', self.show_hex_for_field)
+
+        # Initialize
+        self.update_status()
 
     def add_packet_to_tree(self, packet_data):
-        self.packet_tree.insert('', 'end', values=packet_data[:7], tags=(str(packet_data[0]), packet_data[7]))
+        """Add parsed packet to the packet list"""
+        values = (
+            packet_data['timestamp'],
+            f"{packet_data.get('src_ip', '')}:{packet_data.get('src_port', '')}",
+            f"{packet_data.get('dst_ip', '')}:{packet_data.get('dst_port', '')}",
+            packet_data.get('protocol', ''),
+            packet_data['length'],
+            packet_data.get('info', '')
+        )
+
+        item = self.packet_tree.insert('', 'end', values=values)
+        self.packet_tree.see(item)
+        self.update_status()
 
     def clear_packets(self):
+        """Clear all captured packets"""
         self.packet_tree.delete(*self.packet_tree.get_children())
-        self.details_text.delete(1.0, tk.END)
+        self.clear_details()
+        self.update_status()
+
+    def clear_details(self):
+        """Clear packet details view"""
+        self.details_tree.delete(*self.details_tree.get_children())
+        self.hex_text.delete(1.0, tk.END)
+        self.current_packet_details = None
 
     def set_listening_state(self, is_listening):
+        """Update UI controls based on capture state"""
         self.start_button.config(state=tk.DISABLED if is_listening else tk.NORMAL)
         self.stop_button.config(state=tk.NORMAL if is_listening else tk.DISABLED)
         self.clear_button.config(state=tk.DISABLED if is_listening else tk.NORMAL)
+        self.interface_combo.config(state=tk.DISABLED if is_listening else tk.NORMAL)
 
     def show_packet_details(self, event=None):
+        """Show detailed view of selected packet"""
         selected_item = self.packet_tree.selection()
         if not selected_item:
             return
 
-        item = self.packet_tree.item(selected_item)
-        packet = item['tags'][1] if len(item['tags']) > 1 else None
+        # Clear previous details
+        self.clear_details()
 
-        if not packet:
+        # Get the packet data from analyzer
+        item_index = self.packet_tree.index(selected_item[0])
+        packet_data = self.analyzer.get_packet_data(item_index)
+
+        if not packet_data or 'layers' not in packet_data:
             return
 
-        self.details_text.delete(1.0, tk.END)
-        self.details_text.insert(tk.END, f"Packet #{item['values'][0]} captured at {item['values'][1]}\n")
-        self.details_text.insert(tk.END, f"Source: {item['values'][2]}\n")
-        self.details_text.insert(tk.END, f"Destination: {item['values'][3]}\n")
-        self.details_text.insert(tk.END, f"Protocol: {item['values'][4]}\n")
-        self.details_text.insert(tk.END, f"Length: {item['values'][5]} bytes\n\n")
-        self.details_text.insert(tk.END, "Hex dump:\n")
+        self.current_packet_details = packet_data
 
-        if isinstance(packet, str):
-            try:
-                packet = packet.encode('latin-1')
-            except:
-                packet = b''
+        # Add layers to details tree
+        for layer_name, layer_data in packet_data['layers'].items():
+            layer_node = self.details_tree.insert('', 'end', text=layer_name, open=True)
 
-        for i in range(0, len(packet), 16):
-            chunk = packet[i:i+16]
+            if 'fields' in layer_data:
+                for field in layer_data['fields']:
+                    field_node = self.details_tree.insert(
+                        layer_node, 'end',
+                        text=field['name'],
+                        values=(field['value'], field.get('bytes', b'').hex(' ') if 'bytes' in field else '')
+                    )
+        # Show hex dump of entire packet
+        self.show_hex_dump(packet_data['raw'])
+
+    def show_hex_for_field(self, event=None):
+        """Show hex dump for selected field in details tree"""
+        if not self.current_packet_details:
+            return
+
+        selected_item = self.details_tree.selection()
+        if not selected_item:
+            return
+
+        item = self.details_tree.item(selected_item[0])
+        if 'bytes' in item['values'] and item['values'][1]:
+            self.show_hex_dump(bytes.fromhex(item['values'][1].replace(' ', '')))
+
+    def show_hex_dump(self, data):
+        """Display hex dump of binary data"""
+        self.hex_text.delete(1.0, tk.END)
+
+        if not data:
+            return
+
+        for i in range(0, len(data), 16):
+            chunk = data[i:i+16]
             hex_str = ' '.join(f"{b:02x}" for b in chunk)
             ascii_str = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
-            self.details_text.insert(tk.END, f"{i:04x}: {hex_str.ljust(47)}  {ascii_str}\n")
+            self.hex_text.insert(tk.END, f"{i:04x}: {hex_str.ljust(47)}  {ascii_str}\n")
 
     def apply_filter(self, *args):
+        """Apply filter to packet list"""
         filter_text = self.filter_text.get().lower()
         for item in self.packet_tree.get_children():
-            packet_data = self.packet_tree.item(item)
-            values = packet_data['values']
+            values = self.packet_tree.item(item)['values']
 
             if not filter_text:
                 self.packet_tree.item(item, tags=())
                 continue
 
-            if (filter_text in str(values[2]).lower() or
-                filter_text in str(values[3]).lower() or
-                filter_text in str(values[4]).lower() or
-                filter_text in str(values[6]).lower()):
+            if (filter_text in str(values[1]).lower() or  # Time
+                filter_text in str(values[2]).lower() or  # Source
+                filter_text in str(values[3]).lower() or  # Destination
+                filter_text in str(values[4]).lower() or  # Protocol
+                filter_text in str(values[6]).lower()):   # Info
                 self.packet_tree.item(item, tags=())
             else:
                 self.packet_tree.item(item, tags=('hidden',))
 
+        self.packet_tree.tag_configure('hidden', foreground='gray80')
+
+    def update_status(self):
+        """Update status bar with packet count"""
+        count = len(self.packet_tree.get_children())
+        self.status_var.set(f"Packets: {count}")
+
     def show_error(self, title, message):
+        """Show error message dialog"""
         messagebox.showerror(title, message)
 
     def get_interface_names(self):
+        """Get list of available network interfaces"""
         return [name for name, addrs in psutil.net_if_addrs().items() if self.can_listen(name)]
 
     def can_listen(self, interface):
+        """Check if interface can be used for listening"""
         return any(addr.family == socket.AF_INET for addr in psutil.net_if_addrs().get(interface, []))
 
     def get_interface_ip(self, interface):
+        """Get IP address for specified interface"""
         addresses = psutil.net_if_addrs().get(interface, [])
         for addr in addresses:
             if addr.family == socket.AF_INET:
@@ -159,139 +269,5 @@ class GUIManager:
         return None
 
     def is_windows(self):
+        """Check if running on Windows"""
         return platform.system() == "Windows"
-
-    def save_session(self):
-        if not self.packet_tree.get_children():
-            self.show_error("Warning", "No packets to save")
-            return
-
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".psniff",
-            filetypes=[("Packet Sniffer files", "*.psniff"), ("All files", "*.*")]
-        )
-
-        if not file_path:
-            return
-
-        try:
-            packets = []
-            for item in self.packet_tree.get_children():
-                packet_data = self.packet_tree.item(item)
-                packets.append({
-                    'values': packet_data['values'],
-                    'tags': packet_data['tags'],
-                    'packet': packet_data['tags'][1] if len(packet_data['tags']) > 1 else None
-                })
-
-            with open(file_path, 'wb') as f:
-                pickle.dump({
-                    'packets': packets,
-                    'filter': self.filter_text.get()
-                }, f)
-
-            messagebox.showinfo("Success", f"Session saved to {file_path}")
-        except Exception as e:
-            self.show_error("Error", f"Failed to save session: {str(e)}")
-
-    def load_session(self):
-        file_path = filedialog.askopenfilename(
-            filetypes=[("Packet Sniffer files", "*.psniff"), ("All files", "*.*")]
-        )
-
-        if not file_path:
-            return
-
-        try:
-            with open(file_path, 'rb') as f:
-                session = pickle.load(f)
-
-            viewer = tk.Toplevel(self.root)
-            viewer.title(f"Packet Sniffer Viewer - {os.path.basename(file_path)}")
-
-            # Filter frame
-            filter_var = tk.StringVar(value=session.get('filter', ''))
-            filter_frame = tk.Frame(viewer)
-            filter_frame.pack(fill=tk.X, padx=5, pady=5)
-
-            tk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT)
-            filter_entry = tk.Entry(filter_frame, textvariable=filter_var)
-            filter_entry.pack(side=tk.LEFT, expand=True, fill=tk.X)
-
-            # Packet tree
-            packet_tree = ttk.Treeview(viewer, columns=self.COLUMNS, show='headings')
-            for col in self.COLUMNS:
-                packet_tree.heading(col, text=col)
-                packet_tree.column(col, width=100)
-
-            packet_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-            # Details text
-            details_text = scrolledtext.ScrolledText(viewer, wrap=tk.WORD, width=100, height=15)
-            details_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-            # Load packets
-            for packet_data in session['packets']:
-                packet_tree.insert('', 'end',
-                                 values=packet_data['values'],
-                                 tags=packet_data['tags'])
-
-            def show_details(event):
-                selected_item = packet_tree.selection()
-                if not selected_item:
-                    return
-
-                item = packet_tree.item(selected_item)
-                packet = item['tags'][1] if len(item['tags']) > 1 else None
-
-                if not packet:
-                    return
-
-                details_text.delete(1.0, tk.END)
-                details_text.insert(tk.END, f"Packet #{item['values'][0]} captured at {item['values'][1]}\n")
-                details_text.insert(tk.END, f"Source: {item['values'][2]}\n")
-                details_text.insert(tk.END, f"Destination: {item['values'][3]}\n")
-                details_text.insert(tk.END, f"Protocol: {item['values'][4]}\n")
-                details_text.insert(tk.END, f"Length: {item['values'][5]} bytes\n\n")
-                details_text.insert(tk.END, "Hex dump:\n")
-
-                if isinstance(packet, str):
-                    try:
-                        packet = packet.encode('latin-1')
-                    except:
-                        packet = b''
-
-                for i in range(0, len(packet), 16):
-                    chunk = packet[i:i+16]
-                    hex_str = ' '.join(f"{b:02x}" for b in chunk)
-                    ascii_str = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
-                    details_text.insert(tk.END, f"{i:04x}: {hex_str.ljust(47)}  {ascii_str}\n")
-
-            packet_tree.bind('<<TreeviewSelect>>', show_details)
-
-            def apply_filter(*args):
-                filter_text = filter_var.get().lower()
-                for item in packet_tree.get_children():
-                    packet_data = packet_tree.item(item)
-                    values = packet_data['values']
-                    tags = packet_data['tags']
-
-                    if not filter_text:
-                        packet_tree.item(item, tags=tags)
-                        continue
-
-                    if (filter_text in str(values[2]).lower() or
-                        filter_text in str(values[3]).lower() or
-                        filter_text in str(values[4]).lower() or
-                        filter_text in str(values[6]).lower()):
-                        packet_tree.item(item, tags=tags)
-                    else:
-                        packet_tree.item(item, tags=('hidden',))
-
-                packet_tree.tag_configure('hidden', foreground='gray80')
-
-            filter_var.trace_add('write', apply_filter)
-            apply_filter()
-
-        except Exception as e:
-            self.show_error("Error", f"Failed to load session: {str(e)}")
